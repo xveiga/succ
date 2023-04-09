@@ -18,11 +18,30 @@ chmod +w $CHARGE_SWITCH
 chmod +w $CURRENT_SWITCH
 
 # Reload config when receiving SIGUSR1
-# trap reload_config 10
-# reload_config()
-# {
-#     source $CONFIG_FILE
-# }
+trap reload_config SIGUSR1
+
+reload_config()
+{
+    nb_sleep_reset
+    exec "$0" "$@"
+}
+
+# Signal non-blocking sleep
+# see https://mywiki.wooledge.org/SignalTrap#When_is_the_signal_handled.3F for more details
+nb_sleep()
+{
+    sleep_pid=
+    # As more than one "signal handler" is not allowed, we need to move this line to a separate function nb_sleep_reset
+    # Every signal trap handler HAS to call nb_sleep_reset for the sleep to work properly
+    sleep "$1" & sleep_pid=$!
+    wait
+    sleep_pid=
+}
+
+nb_sleep_reset()
+{
+    [[ $sleep_pid ]] && kill "$sleep_pid"
+}
 
 # Loop indefinetly
 while $ENABLE
@@ -38,5 +57,5 @@ do
             echo 0 > $CHARGE_SWITCH
         fi
     fi
-    sleep $SLEEP_DELAY
+    nb_sleep $SLEEP_DELAY
 done
