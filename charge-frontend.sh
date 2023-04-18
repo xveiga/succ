@@ -1,10 +1,10 @@
 #!/system/bin/sh
 
-CONTROL_PIPE="/dev/battery-daemon-pipe"
-DAEMON_PATH="/data/adb/service.d/battery-daemon.sh"
+CONTROL_PIPE="/dev/succ-pipe"
+DAEMON_PATH="/data/adb/service.d/charge-control.sh"
 DAEMON_PID=$(pgrep -f "$DAEMON_PATH")
 
-if [ $(id -u) != 0 ] ; then
+if [ "$(id -u)" != 0 ] ; then
     echo "This script needs root access"
     exit
 fi
@@ -29,13 +29,13 @@ validate_number()
 send_command()
 {
 	echo "$@" > "$CONTROL_PIPE" &
-	kill -s SIGUSR1 "$DAEMON_PID"
+	kill -s USR2 "$DAEMON_PID"
 }
 
 if [ $# -le 0 ] || [ $# -ge 3 ] ; then
 	echo "Wrong arguments. Usage: $0 <command> <numeric value>"
 	exit 1
-elif [ $# -eq 2 ] && validate_number $2 ; then
+elif [ $# -eq 2 ] && validate_number "$2" ; then
 	echo "$2 is not a valid number"
 	exit 1
 fi

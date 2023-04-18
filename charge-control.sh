@@ -14,7 +14,7 @@ default_params()
 BATTERY_PERCENTAGE_FILE="/sys/class/power_supply/battery/capacity"
 CHARGE_SWITCH="/sys/class/power_supply/battery/input_suspend"
 CURRENT_SWITCH="/sys/class/power_supply/battery/constant_charge_current_max"
-CONTROL_PIPE="/dev/battery-daemon-pipe"
+CONTROL_PIPE="/dev/succ-pipe"
 
 # Set write permission on charge control switches
 set_permissions()
@@ -26,22 +26,6 @@ set_permissions()
 
 
 #### Charge control routines ####
-start_charge()
-{
-    # Verify charge switch is not already set
-    if [ "$(cat $CHARGE_SWITCH)" == "1" ]; then
-        echo 0 > "$CHARGE_SWITCH"
-    fi
-}
-
-stop_charge()
-{
-    # Verify charge switch is not already set
-    if [ "$(cat $CHARGE_SWITCH)" == "0" ]; then
-        echo 1 > "$CHARGE_SWITCH"
-    fi
-}
-
 set_current()
 {
     echo "$1" > "$CURRENT_SWITCH"
@@ -49,12 +33,21 @@ set_current()
 
 charge_control()
 {
+    BATTERY_PERCENTAGE=$(cat $BATTERY_PERCENTAGE_FILE)
     # If battery reaches upper charging limit, and its charging, stop charging
-    if [ "$(cat $BATTERY_PERCENTAGE_FILE)" -ge "$UPPER_CHARGING_LIMIT" ]; then
-	    stop_charge
+    if [ "$BATTERY_PERCENTAGE" -ge "$UPPER_CHARGING_LIMIT" ]; then
+        # Verify charge switch is not already set
+        if [ "$(cat $CHARGE_SWITCH)" = "0" ]; then
+            echo 1 > "$CHARGE_SWITCH"
+            notify "Triggered charge stop at $BATTERY_PERCENTAGE% on $(date)"
+        fi
     # If battery reaches lower charging limit, and its not charging, start charging
-    elif [ "$(cat $BATTERY_PERCENTAGE_FILE)" -lt "$LOWER_CHARGING_LIMIT" ]; then
-	    start_charge
+    elif [ "$BATTERY_PERCENTAGE" -lt "$LOWER_CHARGING_LIMIT" ]; then
+        # Verify charge switch is not already set
+        if [ "$(cat $CHARGE_SWITCH)" = "1" ]; then
+            echo 0 > "$CHARGE_SWITCH"
+            notify "Triggered charge start at $BATTERY_PERCENTAGE% on $(date)"
+        fi
     fi
 }
 
@@ -72,7 +65,8 @@ init()
 
     # Setup signals
     trap on_exit EXIT
-    trap on_sigusr1 SIGUSR1
+    trap on_sigusr1 USR1
+    trap on_sigusr2 USR2
 }
 
 # Validates that the argument is a valid positive number
@@ -101,6 +95,15 @@ on_exit()
 # SIGUSR1
 on_sigusr1()
 {
+    nb_sleep_reset
+    notify "Script reloading"
+    sleep 2
+    exec "$0" "$@"
+}
+
+# SIGUSR2
+on_sigusr2()
+{
     # Reset sleep
     nb_sleep_reset
     # Read control command from pipe
@@ -116,7 +119,7 @@ parse_cmd()
     ARG0="$(echo "$CMD" | cut -d' ' -f1)"
     ARG1="$(echo "$CMD" | cut -d' ' -f2)"
     # Ignore command if second argument is not a numeric value
-    if [ -z $ARG1 ] && $(validate_number $ARG1); then
+    if [ -z "$ARG1" ] && validate_number "$ARG1"; then
         return
     fi
     # Parse command
@@ -127,6 +130,7 @@ parse_cmd()
             if [ "$ARG1" -le 100 ] && [ "$ARG1" -ge 0 ] ; then
                 # Set charging limit
                 echo "upper $ARG1"
+                notify "Charging stop limit set to $ARG1"
                 UPPER_CHARGING_LIMIT="$ARG1"
             fi
             ;;
@@ -134,6 +138,7 @@ parse_cmd()
         lower)
             if [ "$ARG1" -le 100 ] && [ "$ARG1" -ge 0 ] ; then
                 echo "lower $ARG1"
+                notify "Charging start limit set to $ARG1"
                 LOWER_CHARGING_LIMIT="$ARG1"
             fi
             ;;
@@ -141,6 +146,7 @@ parse_cmd()
         setdelay)
             if [ "$ARG1" -le 86400 ] && [ "$ARG1" -ge 0 ] ; then
                 echo "delay $ARG1"
+                notify "Script delay set to $ARG1"
                 SLEEP_DELAY="$ARG1"
             fi
             ;;
@@ -148,33 +154,39 @@ parse_cmd()
         reset)
             echo "reset"
             default_params
+            notify "Default parameters reset"
             ;;
         # Force charging, disable daemon control
         charge)
             echo "charge"
             ENABLE=false
-            start_charge
+            echo 0 > "$CHARGE_SWITCH"
+            notify "Charge start forced"
             ;;
         # Force discharge, disable daemon control
         discharge)
             echo "discharge"
             ENABLE=false
-            stop_charge
+            echo 1 > "$CHARGE_SWITCH"
+            notify "Charge stop forced"
             ;;
         # Enable daemon control again
         enable)
             echo "enable"
             ENABLE=true
+            notify "Daemon enabled"
             ;;
         # Disable daemon control again
         disable)
             echo "disable"
             ENABLE=false
+            notify "Daemon disabled"
             ;;
         # Set maximum charging current
         current)
             if [ "$ARG1" -le 10000000 ] && [ "$ARG1" -ge 0 ] ; then
                 set_current "$ARG1"
+                notify "Charging current set to $ARG1"
                 echo "current $ARG1"
             else
                 echo "invalid current $ARG1"
@@ -182,6 +194,7 @@ parse_cmd()
             ;;
         # Unknown command, ignore
         *)
+            notify "Invalid command sent to daemon"
             echo "invalid command"
             ;;
     esac
@@ -194,26 +207,28 @@ nb_sleep()
     sleep_pid=
     # As more than one "signal handler" is not allowed, we need to move this line to a separate function nb_sleep_reset
     # Every signal trap handler HAS to call nb_sleep_reset for the sleep to work properly
-    #trap '[[ $pid ]] && kill "$pid"' EXIT
-    sleep "$SLEEP_DELAY" & sleep_pid=$!
+    sleep "$1" & sleep_pid=$!
     wait
     sleep_pid=
 }
 
 nb_sleep_reset()
 {
-    [[ $sleep_pid ]] && kill "$sleep_pid"
+    [[ "$sleep_pid" ]] && kill "$sleep_pid"
 }
 
+notify()
+{
+    su -lp 2000 -c "/system/bin/cmd notification post -S bigtext -t 'SUCC' 'SUCC' \"$1\"" > /dev/null
+}
 
-# Main loop
 run()
 {
-    while :; do
-        if [ $ENABLE = true ]; then
-            charge_control
-        fi
-        nb_sleep
+    # Loop indefinetly
+    while $ENABLE
+    do
+        charge_control
+        nb_sleep "$SLEEP_DELAY"
     done
 }
 
