@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 CONTROL_PIPE="/dev/succ-pipe"
-DAEMON_PATH="/data/adb/service.d/charge-control.sh"
+DAEMON_PATH="/data/adb/service.d/succ-daemon.sh"
 DAEMON_PID=$(pgrep -f "$DAEMON_PATH")
 
 if [ "$(id -u)" != 0 ] ; then
