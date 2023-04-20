@@ -2,6 +2,15 @@
 
 #COMANDO PARA RESETEAR [alias comando alias=COMMAND]:     sudo sh -c 'kill -s SIGUSR1 $(pgrep -f "sh /data/adb/service.d/charge-control.sh")'
 
+notify()
+{
+    su -lp 2000 -c "/system/bin/cmd notification post -S bigtext -t 'SUCC' 'SUCC' \"$1\""
+}
+
+until [ .$(getprop sys.boot_completed 2>/dev/null) = .1 ]; do
+  sleep 10
+done
+
 CHARGING_STOP=75
 CHARGING_START=70
 SLEEP_DELAY=60
@@ -14,13 +23,14 @@ CHARGING_SWITCH=/sys/class/power_supply/battery/input_suspend
 CHARGE_LEVEL=/sys/class/power_supply/battery/capacity
 
 #permiso de escritura a archivos
+
 chmod +w $CURRENT_SWITCH
 chmod +w $CHARGING_SWITCH
 
 echo $CHARGESPEED > $CURRENT_SWITCH
 
 # Reload config when receiving SIGUSR1
-trap reload_config SIGUSR1
+trap reload_config USR1
 
 #MAGIA DE XIAOXIAO
 reload_config() 
@@ -39,7 +49,7 @@ nb_sleep()
 
 nb_sleep_reset()
 {
-    [[ $sleep_pid ]] && kill "$sleep_pid"
+    [ "$sleep_pid" ] && kill "$sleep_pid"
 }
 
 while true
